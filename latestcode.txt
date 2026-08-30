@@ -1,0 +1,2562 @@
+import os
+import sys
+import json
+import time
+import uuid
+import socket
+import getpass
+import platform
+import base64
+import hashlib
+import secrets
+import string
+import urllib.request
+import urllib.parse
+import subprocess
+import requests
+import qrcode
+import re
+import ssl
+import ipaddress
+import threading
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from PIL import Image
+from PIL.ExifTags import TAGS
+import io
+import csv
+import whois
+import dns.resolver
+import dns.zone
+import dns.query
+import dns.reversename
+
+version = '27.0.0'
+CODE_URL = 'https://raw.githubusercontent.com/hahaahhdev/imperial-nano/main/latestcode.txt'
+VERSION_URL = 'https://raw.githubusercontent.com/hahaahhdev/imperial-nano/main/latestver.txt'
+DEFAULT_VERSION_URL = 'https://raw.githubusercontent.com/hahaahhdev/imperial-nano/main/latestver.txt'
+DEFAULT_CODE_URL = 'https://raw.githubusercontent.com/hahaahhdev/imperial-nano/main/latestcode.txt'
+MAX_RETRIES = 5
+RETRY_DELAY = 2
+
+def clear():
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+def check_network_connectivity():
+    print('[+] Checking network connectivity...')
+    try:
+        socket.create_connection(("8.8.8.8", 53), timeout=3)
+        print('[+] Network connectivity confirmed')
+        return True
+    except OSError:
+        print('[!] Primary DNS check failed, trying alternative...')
+        try:
+            socket.create_connection(("1.1.1.1", 53), timeout=3)
+            print('[+] Network connectivity confirmed via alternative DNS')
+            return True
+        except OSError:
+            print('[-] No network connectivity detected')
+            return False
+
+def http_get_with_retry(url, timeout=5, max_retries=MAX_RETRIES, retry_delay=RETRY_DELAY):
+    if not url:
+        print('[-] No URL provided for HTTP request')
+        return None
+    
+    print(f'[+] Fetching data from: {url}')
+    
+    for attempt in range(max_retries):
+        try:
+            print(f'[+] Attempt {attempt + 1}/{max_retries}')
+            response = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"})
+            
+            if response.status_code == 404:
+                print('[!] Resource not found (404)')
+                return '404: Not Found'
+            elif response.status_code == 403:
+                print('[!] Access forbidden (403), retrying...')
+                time.sleep(retry_delay)
+                continue
+            elif response.status_code == 429:
+                print('[!] Rate limited (429), waiting longer...')
+                time.sleep(retry_delay * 2)
+                continue
+            elif response.status_code != 200:
+                print(f'[!] Unexpected status code: {response.status_code}')
+                time.sleep(retry_delay)
+                continue
+            
+            print('[+] Data fetched successfully')
+            return response.text
+        except requests.exceptions.ReadTimeout:
+            print(f'[-] Timeout error on attempt {attempt + 1}')
+            time.sleep(retry_delay)
+            continue
+        except requests.exceptions.ConnectionError:
+            print(f'[-] Connection error on attempt {attempt + 1}')
+            time.sleep(retry_delay)
+            continue
+        except requests.exceptions.RequestException as e:
+            print(f'[-] Request exception: {e}')
+            time.sleep(retry_delay)
+            continue
+        except Exception as e:
+            print(f'[-] Unexpected error: {e}')
+            time.sleep(retry_delay)
+            continue
+    
+    print('[+] Falling back to urllib...')
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = resp.read().decode('utf-8')
+            print('[+] Data fetched successfully via urllib')
+            return data
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            print('[!] Resource not found (404)')
+            return '404: Not Found'
+        print(f'[-] HTTP error: {e.code}')
+        return None
+    except Exception as e:
+        print(f'[-] Urllib error: {e}')
+        return None
+    
+    print('[-] All retry attempts failed')
+    return None
+
+def get_public_ip():
+    print('[+] Retrieving public IP address...')
+    if not check_network_connectivity():
+        return "No internet connection"
+    
+    result = http_get_with_retry("https://api.ipify.org/", timeout=10)
+    if result and result != '404: Not Found':
+        ip = result.strip()
+        print(f'[+] Public IP retrieved: {ip}')
+        return ip
+    
+    print('[-] Failed to retrieve public IP')
+    return "Unable to retrieve IP"
+
+def auto_update():
+    global CODE_URL
+    print('[+] Starting auto-update process...')
+    
+    if not check_network_connectivity():
+        print('[-] No internet connection for update')
+        return False
+    
+    print(f'[+] Fetching latest code from: {CODE_URL}')
+    for attempt in range(MAX_RETRIES):
+        remote_code = http_get_with_retry(CODE_URL, timeout=10)
+        if remote_code and not remote_code.startswith('404'):
+            print('[+] Latest code fetched successfully')
+            break
+        print(f'[!] Failed to fetch code (attempt {attempt + 1}/{MAX_RETRIES})')
+        time.sleep(RETRY_DELAY)
+    
+    if not remote_code or remote_code.startswith('404'):
+        print('[-] Failed to fetch latest code')
+        if CODE_URL != DEFAULT_CODE_URL:
+            print('[+] Resetting to default CODE_URL...')
+            CODE_URL = DEFAULT_CODE_URL
+            print('[+] CODE_URL reset to default')
+            print('[+] Retrying with default URL...')
+            remote_code = http_get_with_retry(CODE_URL, timeout=10)
+            if not remote_code or remote_code.startswith('404'):
+                print('[-] Failed to fetch code from default URL')
+                return False
+        else:
+            print('[-] Repository appears to be down')
+            return False
+    
+    current_file = os.path.abspath(__file__)
+    print(f'[+] Writing updated code to: {current_file}')
+    try:
+        with open(current_file, 'w', encoding='utf-8') as f:
+            f.write(remote_code)
+        print('[+] Update completed successfully')
+        return True
+    except PermissionError:
+        print('[-] Permission denied when writing file')
+        print('[!] Run script with appropriate permissions')
+        return False
+    except Exception as e:
+        print(f'[-] Failed to write update: {e}')
+        return False
+
+def art():
+    print(r'''
+               .'>j|_+\(:1I[:[],1.;'
+              ,:' .:+!i. !_~l{It-l]>^?;+?^-''.
+                ..;|I|I'].'>]~_[-:[l:-^{}<_{'!,ti .
+                     ;~<_<.i]_\f{,[i^<~+^<~-`;i-~[:!?.
+                       {'l'{";>'^}!+li:1~]:~.~_`["?< }i[^.   ,.
+                        + .:_[?;'_>[^|l]-_1{?)!<__]+"[I[_<!+'++           .
+                       .""|<,"^^1|}}^!^`~1.^"<i^^[{-!~+l~Ii'{>-           1'
+                       .)<!l[)}_>`-I[<_:>1l><I!i<i`l<_-~+}!~-i+          _-^'
+                        ij1i;:l}'-`[`-;'}.,_,"^. ,~_|^-;_;!,]~`          }]1
+                        [|)[[{iIli l]l::i+ ^:;l}ii+_`):"]">~I-'          [;;
+                               ^_?-~I""I< ];>]>]!`!"{_[1{\]"I>         ,`.~-.
+                                .[~:I_\(\]!~'>-[~`{-/;!?l:[<!'   I}~[{~(!}l-)i
+                                  ^+--iI>-!+\:?f<:)-1:;<~I:i- .{i+1)>!->lt>~~t`
+                                          ^<, ,_l:^l1?{]--~1^ _+I;<;!_(]+-i<f{n.
+                                           :i]?1?-+_+i]!_<}_~.I!<![()+_>+<l1?|n>)_'
+                                           .v^>]{}[{;?_~-I1[('^"-(<{}{(f1[/{;!`~fi>
+                                           ..`^"~iiiI~_:_-<!{;}~[\i]1l    :))1<+~`
+                                               .~1+_)}i<}1]+-<`]+?f+]_^   ]1<<,.
+                                                  {+I,>??+~[/!:]){[[-_|.  ^
+                                                 {{;  .?};+f)!"]{l?~](_11
+                                                      "i>}}>?11)_<?~-!{[|
+                                                 <}_~]!)1_},]?)/nj:?](|?>     .:-~.
+                                             .;l?-]>-;>!-i!iII{_?[i{~[\\! '"I-+]?_l
+                                           ._?|~>^!(?!~)[:_+ii{:{}l1l;~/|1+I:'i_[
+                      .^`.              ."<i!}<}+><~|{[+[\~["{,)}1[+f[{}1{]:_>.`i
+                  '{j)-^)f(i          `>+i;[)_`.>{^l^~}-(<_<> '.      .
+                       -;(t_^       ._{_:^~l_]-[+){<~{I
+                       I]^})]      ',<+'[i_}!<.  I{|i:].
+                         I]>i     ':{',-+fI      "x[;<|^
+                         _i;?: .`I[l'_!!.   ":`,"l!!-{}:
+                          /\j;[),""+`:^  '_<:_(Ir{{1[{;
+                           ;<>;|<^,;     I~li|1\i"_,!.
+                                          {iI("r
+                                          ...''')
+
+def resolve_version_url():
+    global VERSION_URL
+    print('[!] Encountered Error')
+    time.sleep(0.1)
+    print('[+] Resolving...')
+    time.sleep(0.2)
+    print('[+] Identified Error : VERSION_URL is empty or invalid')
+    print('[+] Attempting to resolve...')
+    time.sleep(0.2)
+    if VERSION_URL != DEFAULT_VERSION_URL:
+        VERSION_URL = DEFAULT_VERSION_URL
+        print('[+] Reset VERSION_URL to default')
+        print('[+] Retrying...')
+        time.sleep(0.2)
+        return True
+    else:
+        print('[-] VERSION_URL already set to default')
+        print('[-] Error is external or script is corrupt')
+        return False
+
+def fetch_latest_version():
+    global VERSION_URL
+    print('[+] Fetching latest version...')
+    
+    if not VERSION_URL:
+        if not resolve_version_url():
+            return None, False
+    
+    print('[+] Checking network connectivity...')
+    if not check_network_connectivity():
+        return None, False
+    
+    print(f'[+] Fetching from: {VERSION_URL}')
+    latestver = http_get_with_retry(VERSION_URL, timeout=10)
+    
+    if not latestver:
+        print('[!] Encountered Error')
+        time.sleep(0.1)
+        print('[+] Resolving...')
+        time.sleep(0.2)
+        print('[+] Identified Error : Network issue or server timeout')
+        print('[+] Attempting to resolve...')
+        time.sleep(0.2)
+        print('[+] Retrying with extended timeout...')
+        latestver = http_get_with_retry(VERSION_URL, timeout=15)
+        if not latestver:
+            print('[-] Resolve failed : Network unavailable')
+            print('[-] This is an external error, check internet connection')
+            return None, False
+    
+    if '404' in latestver or 'not found' in latestver.lower():
+        print('[!] Encountered Error')
+        time.sleep(0.1)
+        print('[+] Resolving...')
+        time.sleep(0.2)
+        print('[+] Identified Error : Repository not found')
+        print('[+] Attempting to resolve...')
+        time.sleep(0.2)
+        if VERSION_URL != DEFAULT_VERSION_URL:
+            VERSION_URL = DEFAULT_VERSION_URL
+            print('[+] Reset VERSION_URL to default')
+            print('[+] Retrying...')
+            time.sleep(0.2)
+            latestver = http_get_with_retry(VERSION_URL, timeout=10)
+            if not latestver or '404' in latestver:
+                print('[-] Resolve failed : Repository is down')
+                print('[-] This is an external error, cannot be fixed by script')
+                return None, False
+        else:
+            print('[-] Resolve failed : Repository is down')
+            print('[-] This is an external error, cannot be fixed by script')
+            return None, False
+    
+    print(f'[+] Latest version retrieved: {latestver.strip()}')
+    return latestver.strip(), True
+
+def hash_generator():
+    clear()
+    art()
+    print('[+] Hash Generator')
+    print('[^] 1) MD5')
+    print('[^] 2) SHA1')
+    print('[^] 3) SHA256')
+    print('[^] 4) SHA512')
+    print('[^] 5) All')
+    
+    try:
+        choice = input('[>] Select algorithm: ')
+        print('[+] Reading input...')
+        text = input('[>] Enter text to hash: ')
+        
+        if not text:
+            print('[!] Empty input')
+            input('\n[>] Press enter to continue...')
+            return
+        
+        print('[+] Generating hash...')
+        if choice == '1':
+            result = hashlib.md5(text.encode()).hexdigest()
+            print(f'[+] MD5: {result}')
+        elif choice == '2':
+            result = hashlib.sha1(text.encode()).hexdigest()
+            print(f'[+] SHA1: {result}')
+        elif choice == '3':
+            result = hashlib.sha256(text.encode()).hexdigest()
+            print(f'[+] SHA256: {result}')
+        elif choice == '4':
+            result = hashlib.sha512(text.encode()).hexdigest()
+            print(f'[+] SHA512: {result}')
+        elif choice == '5':
+            print(f'[+] MD5: {hashlib.md5(text.encode()).hexdigest()}')
+            print(f'[+] SHA1: {hashlib.sha1(text.encode()).hexdigest()}')
+            print(f'[+] SHA256: {hashlib.sha256(text.encode()).hexdigest()}')
+            print(f'[+] SHA512: {hashlib.sha512(text.encode()).hexdigest()}')
+        else:
+            print('[!] Invalid option')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def base64_encode():
+    clear()
+    art()
+    print('[+] Base64 Encoder')
+    
+    try:
+        print('[+] Reading input...')
+        text = input('[>] Enter text to encode: ')
+        print('[+] Encoding text...')
+        encoded = base64.b64encode(text.encode()).decode()
+        print(f'[+] Encoded: {encoded}')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def base64_decode():
+    clear()
+    art()
+    print('[+] Base64 Decoder')
+    
+    try:
+        print('[+] Reading input...')
+        text = input('[>] Enter base64 to decode: ')
+        print('[+] Decoding base64...')
+        decoded = base64.b64decode(text).decode()
+        print(f'[+] Decoded: {decoded}')
+    except Exception as e:
+        print(f'[-] Error: Invalid base64 or decoding failed: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def password_generator():
+    clear()
+    art()
+    print('[+] Password Generator')
+    
+    try:
+        print('[+] Reading parameters...')
+        try:
+            length = int(input('[>] Enter password length (minimum 4): '))
+            if length < 4:
+                print('[!] Password length must be at least 4 characters')
+                length = 4
+                print('[+] Using minimum length of 4')
+        except ValueError:
+            print('[!] Invalid length, using default of 12')
+            length = 12
+        
+        use_upper = input('[>] Include uppercase? (y/n): ').lower() == 'y'
+        use_digits = input('[>] Include digits? (y/n): ').lower() == 'y'
+        use_special = input('[>] Include special chars? (y/n): ').lower() == 'y'
+        
+        print('[+] Generating password...')
+        chars = string.ascii_lowercase
+        if use_upper:
+            chars += string.ascii_uppercase
+        if use_digits:
+            chars += string.digits
+        if use_special:
+            chars += string.punctuation
+        
+        password = ''.join(secrets.choice(chars) for _ in range(length))
+        print(f'[+] Generated password: {password}')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def uuid_generator():
+    clear()
+    art()
+    print('[+] UUID Generator')
+    
+    print('[+] Generating UUIDs...')
+    print(f'[+] UUID4: {uuid.uuid4()}')
+    print(f'[+] UUID1: {uuid.uuid1()}')
+    
+    input('\n[>] Press enter to continue...')
+
+def text_manipulation():
+    clear()
+    art()
+    print('[+] Text Manipulation')
+    print('[^] 1) Uppercase')
+    print('[^] 2) Lowercase')
+    print('[^] 3) Reverse')
+    print('[^] 4) Count characters')
+    print('[^] 5) Count words')
+    print('[^] 6) Title case')
+    print('[^] 7) Swap case')
+    print('[^] 8) Remove whitespace')
+    
+    try:
+        choice = input('[>] Select operation: ')
+        print('[+] Reading input...')
+        text = input('[>] Enter text: ')
+        print('[+] Processing text...')
+        
+        if choice == '1':
+            result = text.upper()
+            print(f'[+] Result: {result}')
+        elif choice == '2':
+            result = text.lower()
+            print(f'[+] Result: {result}')
+        elif choice == '3':
+            result = text[::-1]
+            print(f'[+] Result: {result}')
+        elif choice == '4':
+            result = len(text)
+            print(f'[+] Characters: {result}')
+        elif choice == '5':
+            result = len(text.split())
+            print(f'[+] Words: {result}')
+        elif choice == '6':
+            result = text.title()
+            print(f'[+] Result: {result}')
+        elif choice == '7':
+            result = text.swapcase()
+            print(f'[+] Result: {result}')
+        elif choice == '8':
+            result = text.strip()
+            print(f'[+] Result: {result}')
+        else:
+            print('[!] Invalid option')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def qr_code_generator():
+    clear()
+    art()
+    print('[+] QR Code Generator')
+    
+    try:
+        print('[+] Reading parameters...')
+        data = input('[>] Enter data for QR code: ')
+        filename = input('[>] Output filename (default: qr.png): ') or 'qr.png'
+        
+        print('[+] Generating QR code...')
+        qr = qrcode.QRCode(version=1, box_size=10, border=5)
+        qr.add_data(data)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        img.save(filename)
+        print(f'[+] QR code saved to {filename}')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def hash_cracker():
+    clear()
+    art()
+    print('[+] Hash Cracker')
+    print('[^] 1) MD5')
+    print('[^] 2) SHA1')
+    print('[^] 3) SHA256')
+    
+    try:
+        algo = input('[>] Select algorithm: ')
+        print('[+] Reading hash...')
+        hash_to_crack = input('[>] Enter hash to crack: ')
+        print('[+] Reading wordlist path...')
+        wordlist_path = input('[>] Enter wordlist path: ')
+        
+        if not os.path.exists(wordlist_path):
+            print('[-] Wordlist not found')
+            input('\n[>] Press enter to continue...')
+            return
+        
+        print('[+] Starting hash cracking...')
+        with open(wordlist_path, 'r', encoding='utf-8', errors='ignore') as f:
+            for word in f:
+                word = word.strip()
+                if algo == '1':
+                    hashed = hashlib.md5(word.encode()).hexdigest()
+                elif algo == '2':
+                    hashed = hashlib.sha1(word.encode()).hexdigest()
+                elif algo == '3':
+                    hashed = hashlib.sha256(word.encode()).hexdigest()
+                else:
+                    print('[!] Invalid algorithm')
+                    return
+                
+                if hashed == hash_to_crack:
+                    print(f'[+] Found: {word}')
+                    input('\n[>] Press enter to continue...')
+                    return
+        
+        print('[-] Password not found in wordlist')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def url_encoder():
+    clear()
+    art()
+    print('[+] URL Encoder')
+    
+    try:
+        print('[+] Reading input...')
+        text = input('[>] Enter URL/text to encode: ')
+        print('[+] Encoding URL...')
+        encoded = urllib.parse.quote(text)
+        print(f'[+] Encoded: {encoded}')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def url_decoder():
+    clear()
+    art()
+    print('[+] URL Decoder')
+    
+    try:
+        print('[+] Reading input...')
+        text = input('[>] Enter URL to decode: ')
+        print('[+] Decoding URL...')
+        decoded = urllib.parse.unquote(text)
+        print(f'[+] Decoded: {decoded}')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def exif_extraction():
+    clear()
+    art()
+    print('[+] EXIF Data Extraction')
+    
+    try:
+        print('[+] Reading image path...')
+        image_path = input('[>] Enter image path: ')
+        
+        if not os.path.exists(image_path):
+            print('[-] File not found')
+            input('\n[>] Press enter to continue...')
+            return
+        
+        print('[+] Opening image...')
+        image = Image.open(image_path)
+        print('[+] Extracting EXIF data...')
+        exifdata = image.getexif()
+        
+        if not exifdata:
+            print('[-] No EXIF data found')
+            input('\n[>] Press enter to continue...')
+            return
+        
+        for tag_id, value in exifdata.items():
+            tag = TAGS.get(tag_id, tag_id)
+            print(f'[+] {tag}: {value}')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def reverse_image_search():
+    clear()
+    art()
+    print('[+] Reverse Image Search')
+    print('[^] 1) Google')
+    print('[^] 2) Bing')
+    print('[^] 3) Yandex')
+    print('[^] 4) TinEye')
+    
+    try:
+        choice = input('[>] Select search engine: ')
+        print('[+] Reading image path...')
+        image_path = input('[>] Enter image path: ')
+        
+        if not os.path.exists(image_path):
+            print('[-] File not found')
+            input('\n[>] Press enter to continue...')
+            return
+        
+        print('[+] Preparing reverse image search...')
+        if choice == '1':
+            print('[+] Upload to: https://images.google.com')
+        elif choice == '2':
+            print('[+] Upload to: https://www.bing.com/images')
+        elif choice == '3':
+            print('[+] Upload to: https://yandex.com/images')
+        elif choice == '4':
+            print('[+] Upload to: https://tineye.com')
+        else:
+            print('[!] Invalid option')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def metadata_viewer():
+    clear()
+    art()
+    print('[+] Metadata Viewer')
+    
+    try:
+        print('[+] Reading file path...')
+        file_path = input('[>] Enter file path: ')
+        
+        if not os.path.exists(file_path):
+            print('[-] File not found')
+            input('\n[>] Press enter to continue...')
+            return
+        
+        print('[+] Extracting file metadata...')
+        stat = os.stat(file_path)
+        print(f'[+] File: {file_path}')
+        print(f'[+] Size: {stat.st_size} bytes')
+        print(f'[+] Created: {datetime.fromtimestamp(stat.st_ctime)}')
+        print(f'[+] Modified: {datetime.fromtimestamp(stat.st_mtime)}')
+        print(f'[+] Accessed: {datetime.fromtimestamp(stat.st_atime)}')
+        
+        if file_path.lower().endswith(('.jpg', '.jpeg', '.png', '.gif')):
+            print('[+] Extracting image metadata...')
+            image = Image.open(file_path)
+            print(f'[+] Format: {image.format}')
+            print(f'[+] Mode: {image.mode}')
+            print(f'[+] Size: {image.size}')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def whois_lookup():
+    clear()
+    art()
+    print('[+] WHOIS Lookup')
+    
+    try:
+        print('[+] Reading domain name...')
+        domain = input('[>] Enter domain: ')
+        print(f'[+] Performing WHOIS lookup for {domain}...')
+        
+        w = whois.whois(domain)
+        if w.domain_name:
+            print(f'[+] Domain: {w.domain_name}')
+        if w.registrar:
+            print(f'[+] Registrar: {w.registrar}')
+        if w.creation_date:
+            print(f'[+] Creation date: {w.creation_date}')
+        if w.expiration_date:
+            print(f'[+] Expiration date: {w.expiration_date}')
+        if w.name_servers:
+            print(f'[+] Name servers: {w.name_servers}')
+        if w.status:
+            print(f'[+] Status: {w.status}')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def dns_records():
+    clear()
+    art()
+    print('[+] DNS Records')
+    
+    try:
+        print('[+] Reading domain name...')
+        domain = input('[>] Enter domain: ')
+        print(f'[+] Fetching DNS records for {domain}...')
+        
+        record_types = ['A', 'AAAA', 'MX', 'NS', 'TXT', 'CNAME', 'SOA']
+        for record_type in record_types:
+            try:
+                print(f'[+] Fetching {record_type} records...')
+                answers = dns.resolver.resolve(domain, record_type)
+                print(f'[+] {record_type} Records:')
+                for answer in answers:
+                    print(f'    {answer}')
+            except dns.resolver.NoAnswer:
+                print(f'[-] No {record_type} records')
+            except dns.resolver.NXDOMAIN:
+                print('[-] Domain does not exist')
+                break
+            except Exception as e:
+                print(f'[!] Error fetching {record_type} records: {e}')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def dns_zone_transfer():
+    clear()
+    art()
+    print('[+] DNS Zone Transfer')
+    
+    try:
+        print('[+] Reading domain name...')
+        domain = input('[>] Enter domain: ')
+        
+        print('[+] Finding name servers...')
+        try:
+            ns_records = dns.resolver.resolve(domain, 'NS')
+            name_servers = [str(ns) for ns in ns_records]
+            print(f'[+] Found name servers: {name_servers}')
+        except Exception as e:
+            print(f'[-] Failed to find name servers: {e}')
+            input('\n[>] Press enter to continue...')
+            return
+        
+        for ns in name_servers:
+            print(f'[+] Attempting zone transfer from {ns}...')
+            try:
+                zone = dns.zone.from_xfr(dns.query.xfr(ns, domain))
+                print(f'[+] Zone transfer successful from {ns}')
+                for name, node in zone.nodes.items():
+                    for rdataset in node.rdatasets:
+                        print(f'[+] {name} {rdataset}')
+                break
+            except Exception as e:
+                print(f'[!] Zone transfer failed from {ns}: {e}')
+        else:
+            print('[-] Zone transfer failed from all name servers')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def ssl_certificate_info():
+    clear()
+    art()
+    print('[+] SSL Certificate Info')
+    
+    try:
+        print('[+] Reading hostname...')
+        hostname = input('[>] Enter hostname: ')
+        port = int(input('[>] Enter port (default 443): ') or '443')
+        
+        print(f'[+] Connecting to {hostname}:{port}...')
+        context = ssl.create_default_context()
+        with socket.create_connection((hostname, port), timeout=10) as sock:
+            with context.wrap_socket(sock, server_hostname=hostname) as ssock:
+                print('[+] Retrieving certificate...')
+                cert = ssock.getpeercert()
+                print(f'[+] Certificate: {cert}')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def security_headers_check():
+    clear()
+    art()
+    print('[+] Security Headers Check')
+    
+    try:
+        print('[+] Reading URL...')
+        url = input('[>] Enter URL (with http/https): ')
+        print(f'[+] Checking security headers for {url}...')
+        
+        response = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        security_headers = [
+            'Strict-Transport-Security',
+            'Content-Security-Policy',
+            'X-Frame-Options',
+            'X-Content-Type-Options',
+            'X-XSS-Protection',
+            'Referrer-Policy'
+        ]
+        
+        for header in security_headers:
+            if header in response.headers:
+                print(f'[+] {header}: {response.headers[header]}')
+            else:
+                print(f'[-] Missing: {header}')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def robots_txt_analysis():
+    clear()
+    art()
+    print('[+] robots.txt Analysis')
+    
+    try:
+        print('[+] Reading domain name...')
+        domain = input('[>] Enter domain (without http): ')
+        url = f'https://{domain}/robots.txt'
+        
+        print(f'[+] Fetching robots.txt from {url}...')
+        response = http_get_with_retry(url, timeout=10)
+        if response and response != '404: Not Found':
+            print(f'[+] robots.txt found:\n{response}')
+        else:
+            print('[-] robots.txt not found')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def sitemap_parser():
+    clear()
+    art()
+    print('[+] Sitemap Parser')
+    
+    try:
+        print('[+] Reading domain name...')
+        domain = input('[>] Enter domain (without http): ')
+        url = f'https://{domain}/sitemap.xml'
+        
+        print(f'[+] Fetching sitemap from {url}...')
+        response = http_get_with_retry(url, timeout=10)
+        if response and response != '404: Not Found':
+            print('[+] Parsing sitemap...')
+            urls = re.findall(r'<loc>(.*?)</loc>', response)
+            if urls:
+                print(f'[+] Found {len(urls)} URLs:')
+                for u in urls[:20]:
+                    print(f'    {u}')
+                if len(urls) > 20:
+                    print(f'    ... and {len(urls) - 20} more')
+            else:
+                print('[-] No URLs found in sitemap')
+        else:
+            print('[-] Sitemap not found')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def instagram_profile_info():
+    clear()
+    art()
+    print('[+] Instagram Profile Info')
+    
+    try:
+        print('[+] Reading username...')
+        username = input('[>] Enter username: ')
+        url = f'https://www.instagram.com/{username}/?__a=1'
+        
+        print(f'[+] Fetching Instagram profile for {username}...')
+        response = http_get_with_retry(url, timeout=10)
+        if response and response != '404: Not Found':
+            print('[+] Parsing profile data...')
+            data = json.loads(response)
+            user = data.get('graphql', {}).get('user', {})
+            if user:
+                print(f'[+] Username: {user.get("username")}')
+                print(f'[+] Full name: {user.get("full_name")}')
+                print(f'[+] Bio: {user.get("biography")}')
+                print(f'[+] Followers: {user.get("edge_followed_by", {}).get("count")}')
+                print(f'[+] Following: {user.get("edge_follow", {}).get("count")}')
+                print(f'[+] Posts: {user.get("edge_owner_to_timeline_media", {}).get("count")}')
+                print(f'[+] Private: {user.get("is_private")}')
+                print(f'[+] Verified: {user.get("is_verified")}')
+            else:
+                print('[-] User not found')
+        else:
+            print('[-] Failed to fetch profile')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def twitter_user_lookup():
+    clear()
+    art()
+    print('[+] Twitter/X User Lookup')
+    print('[+] Note: Twitter API requires authentication')
+    
+    try:
+        print('[+] Reading username...')
+        username = input('[>] Enter username to construct URL: ')
+        print(f'[+] Profile URL: https://twitter.com/{username}')
+        print(f'[+] Alternative: https://x.com/{username}')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def reddit_user_analysis():
+    clear()
+    art()
+    print('[+] Reddit User Analysis')
+    
+    try:
+        print('[+] Reading username...')
+        username = input('[>] Enter username: ')
+        url = f'https://www.reddit.com/user/{username}/about.json'
+        
+        print(f'[+] Fetching Reddit profile for {username}...')
+        response = http_get_with_retry(url, timeout=10)
+        if response and response != '404: Not Found':
+            print('[+] Parsing profile data...')
+            data = json.loads(response)
+            user = data.get('data', {})
+            if user:
+                print(f'[+] Username: {user.get("name")}')
+                print(f'[+] Created: {datetime.fromtimestamp(user.get("created_utc", 0))}')
+                print(f'[+] Link karma: {user.get("link_karma")}')
+                print(f'[+] Comment karma: {user.get("comment_karma")}')
+                print(f'[+] Is gold: {user.get("is_gold")}')
+                print(f'[+] Is mod: {user.get("is_mod")}')
+            else:
+                print('[-] User not found')
+        else:
+            print('[-] Failed to fetch profile')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def tiktok_profile_lookup():
+    clear()
+    art()
+    print('[+] TikTok Profile Lookup')
+    print('[+] Note: TikTok requires API authentication')
+    
+    try:
+        print('[+] Reading username...')
+        username = input('[>] Enter username to construct URL: ')
+        print(f'[+] Profile URL: https://www.tiktok.com/@{username}')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def youtube_channel_info():
+    clear()
+    art()
+    print('[+] YouTube Channel Info')
+    print('[+] Note: Requires YouTube API key')
+    
+    try:
+        print('[+] Reading channel name...')
+        channel = input('[>] Enter channel name/ID: ')
+        print(f'[+] Channel URL: https://www.youtube.com/@{channel}')
+        print('[+] For API access, get key from Google Cloud Console')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def github_profile_info():
+    clear()
+    art()
+    print('[+] GitHub Profile Info')
+    
+    try:
+        print('[+] Reading username...')
+        username = input('[>] Enter username: ')
+        url = f'https://api.github.com/users/{username}'
+        
+        print(f'[+] Fetching GitHub profile for {username}...')
+        response = http_get_with_retry(url, timeout=10)
+        if response and response != '404: Not Found':
+            print('[+] Parsing profile data...')
+            data = json.loads(response)
+            print(f'[+] Username: {data.get("login")}')
+            print(f'[+] Name: {data.get("name")}')
+            print(f'[+] Bio: {data.get("bio")}')
+            print(f'[+] Location: {data.get("location")}')
+            print(f'[+] Public repos: {data.get("public_repos")}')
+            print(f'[+] Followers: {data.get("followers")}')
+            print(f'[+] Following: {data.get("following")}')
+            print(f'[+] Created: {data.get("created_at")}')
+            print(f'[+] Blog: {data.get("blog")}')
+            print(f'[+] Company: {data.get("company")}')
+        else:
+            print('[-] User not found')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def check_email_breaches():
+    clear()
+    art()
+    print('[+] Email Breach Check')
+    print('[+] Using HaveIBeenPwned API')
+    
+    try:
+        print('[+] Reading email address...')
+        email = input('[>] Enter email: ')
+        url = f'https://haveibeenpwned.com/api/v3/breachedaccount/{email}'
+        
+        print(f'[+] Checking breaches for {email}...')
+        response = http_get_with_retry(url, timeout=10)
+        if response and response != '404: Not Found':
+            print('[+] Parsing breach data...')
+            breaches = json.loads(response)
+            print(f'[+] Found {len(breaches)} breaches:')
+            for breach in breaches:
+                print(f'    - {breach.get("Name")}: {breach.get("BreachDate")}')
+        elif response == '404: Not Found':
+            print('[+] No breaches found for this email')
+        else:
+            print('[-] Failed to check breaches')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def check_password_breaches():
+    clear()
+    art()
+    print('[+] Password Breach Check')
+    print('[+] Using HaveIBeenPwned k-anonymity model')
+    
+    try:
+        print('[+] Reading password...')
+        password = input('[>] Enter password: ')
+        print('[+] Hashing password...')
+        sha1_hash = hashlib.sha1(password.encode()).hexdigest().upper()
+        prefix = sha1_hash[:5]
+        suffix = sha1_hash[5:]
+        url = f'https://api.pwnedpasswords.com/range/{prefix}'
+        
+        print('[+] Checking password against breach database...')
+        response = http_get_with_retry(url, timeout=10)
+        if response:
+            print('[+] Analyzing results...')
+            for line in response.split('\n'):
+                if line.split(':')[0] == suffix:
+                    count = line.split(':')[1].strip()
+                    print(f'[!] Password found {count} times in breaches!')
+                    break
+            else:
+                print('[+] Password not found in breaches')
+        else:
+            print('[-] Failed to check password')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def check_domain_breaches():
+    clear()
+    art()
+    print('[+] Domain Breach Check')
+    
+    try:
+        print('[+] Reading domain name...')
+        domain = input('[>] Enter domain: ')
+        url = f'https://haveibeenpwned.com/api/v3/breaches?domain={domain}'
+        
+        print(f'[+] Checking breaches for {domain}...')
+        response = http_get_with_retry(url, timeout=10)
+        if response and response != '404: Not Found':
+            print('[+] Parsing breach data...')
+            breaches = json.loads(response)
+            print(f'[+] Found {len(breaches)} breaches:')
+            for breach in breaches:
+                print(f'    - {breach.get("Name")}: {breach.get("BreachDate")}')
+        elif response == '404: Not Found':
+            print('[+] No breaches found for this domain')
+        else:
+            print('[-] Failed to check breaches')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def check_username_breaches():
+    clear()
+    art()
+    print('[+] Username Breach Check')
+    
+    try:
+        print('[+] Reading username...')
+        username = input('[>] Enter username: ')
+        print(f'[+] Checking username: {username}')
+        print('[+] Manual check: https://haveibeenpwned.com/')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def dark_web_mentions():
+    clear()
+    art()
+    print('[+] Dark Web Mentions')
+    print('[+] Note: Dark web search requires special tools')
+    
+    try:
+        print('[+] Reading search query...')
+        query = input('[>] Enter search query for dark web search URL: ')
+        onion_url = f'http://juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion/search?q={urllib.parse.quote(query)}'
+        print(f'[+] Ahmia search: {onion_url}')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def extract_emails():
+    clear()
+    art()
+    print('[+] Email Extractor')
+    
+    try:
+        print('[+] Reading website URL...')
+        url = input('[>] Enter website URL: ')
+        print(f'[+] Fetching {url}...')
+        response = http_get_with_retry(url, timeout=10)
+        if response and response != '404: Not Found':
+            print('[+] Extracting emails...')
+            emails = re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', response)
+            if emails:
+                unique_emails = list(set(emails))
+                print(f'[+] Found {len(unique_emails)} unique emails:')
+                for email in unique_emails:
+                    print(f'    {email}')
+            else:
+                print('[-] No emails found')
+        else:
+            print('[-] Failed to fetch page')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def scrape_phone_numbers():
+    clear()
+    art()
+    print('[+] Phone Number Scraper')
+    
+    try:
+        print('[+] Reading website URL...')
+        url = input('[>] Enter website URL: ')
+        print(f'[+] Fetching {url}...')
+        response = http_get_with_retry(url, timeout=10)
+        if response and response != '404: Not Found':
+            print('[+] Extracting phone numbers...')
+            phones = re.findall(r'[\+\(]?[1-9][0-9 .\-\(\)]{8,}[0-9]', response)
+            if phones:
+                print(f'[+] Found {len(phones)} phone numbers:')
+                for phone in phones:
+                    print(f'    {phone}')
+            else:
+                print('[-] No phone numbers found')
+        else:
+            print('[-] Failed to fetch page')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def find_linked_pages():
+    clear()
+    art()
+    print('[+] Linked Pages Finder')
+    
+    try:
+        print('[+] Reading website URL...')
+        url = input('[>] Enter website URL: ')
+        print(f'[+] Fetching {url}...')
+        response = http_get_with_retry(url, timeout=10)
+        if response and response != '404: Not Found':
+            print('[+] Extracting links...')
+            links = re.findall(r'href=[\'"]?([^\'" >]+)', response)
+            if links:
+                unique_links = list(set(links))
+                print(f'[+] Found {len(unique_links)} links:')
+                for link in unique_links[:20]:
+                    print(f'    {link}')
+                if len(unique_links) > 20:
+                    print(f'    ... and {len(unique_links) - 20} more')
+            else:
+                print('[-] No links found')
+        else:
+            print('[-] Failed to fetch page')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def extract_web_metadata():
+    clear()
+    art()
+    print('[+] Web Metadata Extractor')
+    
+    try:
+        print('[+] Reading website URL...')
+        url = input('[>] Enter website URL: ')
+        print(f'[+] Fetching {url}...')
+        response = http_get_with_retry(url, timeout=10)
+        if response and response != '404: Not Found':
+            print('[+] Extracting metadata...')
+            title = re.findall(r'<title>(.*?)</title>', response, re.IGNORECASE)
+            meta_desc = re.findall(r'<meta[^>]*name=["\']description["\'][^>]*content=["\'](.*?)["\']', response, re.IGNORECASE)
+            meta_keys = re.findall(r'<meta[^>]*name=["\']keywords["\'][^>]*content=["\'](.*?)["\']', response, re.IGNORECASE)
+            
+            if title:
+                print(f'[+] Title: {title[0]}')
+            if meta_desc:
+                print(f'[+] Description: {meta_desc[0]}')
+            if meta_keys:
+                print(f'[+] Keywords: {meta_keys[0]}')
+            if not title and not meta_desc and not meta_keys:
+                print('[-] No metadata found')
+        else:
+            print('[-] Failed to fetch page')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def save_page_content():
+    clear()
+    art()
+    print('[+] Save Page Content')
+    
+    try:
+        print('[+] Reading website URL...')
+        url = input('[>] Enter website URL: ')
+        print(f'[+] Fetching {url}...')
+        response = http_get_with_retry(url, timeout=10)
+        if response and response != '404: Not Found':
+            filename = input('[>] Output filename (default: page.html): ') or 'page.html'
+            print(f'[+] Saving to {filename}...')
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write(response)
+            print(f'[+] Saved to {filename}')
+        else:
+            print('[-] Failed to fetch page')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def carrier_detection():
+    clear()
+    art()
+    print('[+] Carrier Detection')
+    print('[+] Using numverify API (requires API key)')
+    
+    try:
+        print('[+] Reading phone number...')
+        number = input('[>] Enter phone number (with country code): ')
+        print(f'[+] Number: {number}')
+        print('[+] Manual lookup: https://www.numverify.com/')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def location_by_area_code():
+    clear()
+    art()
+    print('[+] Location by Area Code')
+    
+    try:
+        print('[+] Reading area code...')
+        area_code = input('[>] Enter area code: ')
+        print(f'[+] Area code: {area_code}')
+        print('[+] Manual lookup: https://www.areacodelocations.info/')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def voicemail_detection():
+    clear()
+    art()
+    print('[+] Voicemail Detection')
+    print('[+] Note: Requires telecom API access')
+    
+    try:
+        print('[+] Reading phone number...')
+        number = input('[>] Enter phone number: ')
+        print(f'[+] Checking: {number}')
+        print('[+] Manual: https://www.twilio.com/lookup')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def line_type_check():
+    clear()
+    art()
+    print('[+] Line Type Check')
+    print('[+] Note: Requires telecom API access')
+    
+    try:
+        print('[+] Reading phone number...')
+        number = input('[>] Enter phone number: ')
+        print(f'[+] Checking: {number}')
+        print('[+] Manual: https://www.twilio.com/lookup')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def spam_score_check():
+    clear()
+    art()
+    print('[+] Spam Score Check')
+    print('[+] Note: Requires API access')
+    
+    try:
+        print('[+] Reading phone number...')
+        number = input('[>] Enter phone number: ')
+        print(f'[+] Checking: {number}')
+        print('[+] Manual: https://www.spamcalls.net/')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def username_osint():
+    clear()
+    art()
+    print('[+] Username OSINT')
+    print('[+] Checking username across platforms...')
+    
+    try:
+        print('[+] Reading username...')
+        username = input('[>] Enter username: ')
+        
+        platforms = [
+            f'https://twitter.com/{username}',
+            f'https://instagram.com/{username}',
+            f'https://facebook.com/{username}',
+            f'https://github.com/{username}',
+            f'https://reddit.com/user/{username}',
+            f'https://tiktok.com/@{username}',
+            f'https://youtube.com/@{username}',
+            f'https://linkedin.com/in/{username}',
+            f'https://pinterest.com/{username}',
+            f'https://tumblr.com/{username}',
+            f'https://flickr.com/people/{username}',
+            f'https://twitch.tv/{username}',
+            f'https://steamcommunity.com/id/{username}',
+            f'https://soundcloud.com/{username}',
+            f'https://medium.com/@{username}',
+            f'https://dev.to/{username}',
+            f'https://dribbble.com/{username}',
+            f'https://behance.net/{username}',
+            f'https://keybase.io/{username}',
+            f'https://pastebin.com/u/{username}'
+        ]
+        
+        print(f'[+] Checking {len(platforms)} platforms...')
+        for platform in platforms:
+            try:
+                print(f'[+] Checking: {platform}')
+                response = requests.head(platform, timeout=5, allow_redirects=True)
+                if response.status_code == 200:
+                    print(f'[+] Found: {platform}')
+            except:
+                pass
+        
+        print('[+] Check complete')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def find_social_profiles():
+    clear()
+    art()
+    print('[+] Find Social Media Profiles')
+    
+    try:
+        print('[+] Reading username...')
+        username = input('[>] Enter username: ')
+        print(f'[+] Searching for: {username}')
+        print('[+] Manual: https://namechk.com/')
+        print('[+] Manual: https://whatsmyname.app/')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def detect_account_dates():
+    clear()
+    art()
+    print('[+] Detect Account Creation Dates')
+    print('[+] Note: Requires API access for accurate dates')
+    
+    try:
+        print('[+] Reading username...')
+        username = input('[>] Enter username: ')
+        print(f'[+] Checking: {username}')
+        print('[+] Manual: https://twitter.com/audit')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def find_related_usernames():
+    clear()
+    art()
+    print('[+] Find Related Usernames')
+    
+    try:
+        print('[+] Reading username...')
+        username = input('[>] Enter username: ')
+        print('[+] Generating variations...')
+        
+        variations = [
+            username,
+            username + '1',
+            username + '123',
+            username + '_',
+            '_' + username,
+            username + 'official',
+            'real' + username,
+            'the' + username,
+            username + '2',
+            username + 'x',
+            username + '01',
+            username + '_official',
+            'official_' + username,
+            username + '_real',
+            'real_' + username,
+            username + '_x',
+            'x_' + username,
+            username + '_official_',
+            username.upper(),
+            username.lower()
+        ]
+        
+        print('[+] Suggested variations:')
+        for v in variations:
+            print(f'    {v}')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def profile_picture_reverse():
+    clear()
+    art()
+    print('[+] Profile Picture Reverse Lookup')
+    print('[+] Note: Upload image to reverse image search engines')
+    
+    try:
+        print('[+] Reading image path...')
+        image_path = input('[>] Enter image path: ')
+        
+        if not os.path.exists(image_path):
+            print('[-] File not found')
+            input('\n[>] Press enter to continue...')
+            return
+        
+        print('[+] Preparing reverse image search...')
+        print('[+] Upload to: https://images.google.com')
+        print('[+] Upload to: https://yandex.com/images')
+        print('[+] Upload to: https://tineye.com')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def ip_geolocation():
+    clear()
+    art()
+    print('[+] IP Geolocation')
+    
+    try:
+        print('[+] Reading IP address...')
+        ip = input('[>] Enter IP address (blank for your IP): ')
+        if not ip:
+            print('[+] Fetching public IP...')
+            ip = get_public_ip()
+        
+        print(f'[+] Fetching geolocation for {ip}...')
+        url = f'http://ip-api.com/json/{ip}'
+        response = http_get_with_retry(url, timeout=10)
+        if response and response != '404: Not Found':
+            print('[+] Parsing geolocation data...')
+            data = json.loads(response)
+            if data.get('status') == 'success':
+                print(f'[+] IP: {data.get("query")}')
+                print(f'[+] Country: {data.get("country")}')
+                print(f'[+] Region: {data.get("regionName")}')
+                print(f'[+] City: {data.get("city")}')
+                print(f'[+] ZIP: {data.get("zip")}')
+                print(f'[+] Latitude: {data.get("lat")}')
+                print(f'[+] Longitude: {data.get("lon")}')
+                print(f'[+] Timezone: {data.get("timezone")}')
+                print(f'[+] ISP: {data.get("isp")}')
+                print(f'[+] Org: {data.get("org")}')
+                print(f'[+] AS: {data.get("as")}')
+            else:
+                print('[-] Failed to get geolocation')
+        else:
+            print('[-] Failed to fetch data')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def isp_lookup():
+    clear()
+    art()
+    print('[+] ISP Lookup')
+    
+    try:
+        print('[+] Reading IP address...')
+        ip = input('[>] Enter IP address: ')
+        print(f'[+] Fetching ISP info for {ip}...')
+        url = f'http://ip-api.com/json/{ip}'
+        response = http_get_with_retry(url, timeout=10)
+        if response and response != '404: Not Found':
+            print('[+] Parsing ISP data...')
+            data = json.loads(response)
+            print(f'[+] ISP: {data.get("isp")}')
+            print(f'[+] Org: {data.get("org")}')
+            print(f'[+] AS: {data.get("as")}')
+        else:
+            print('[-] Failed to fetch data')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def proxy_vpn_detection():
+    clear()
+    art()
+    print('[+] Proxy/VPN Detection')
+    
+    try:
+        print('[+] Reading IP address...')
+        ip = input('[>] Enter IP address: ')
+        print(f'[+] Checking proxy/VPN status for {ip}...')
+        url = f'http://ip-api.com/json/{ip}?fields=proxy,hosting'
+        response = http_get_with_retry(url, timeout=10)
+        if response and response != '404: Not Found':
+            print('[+] Analyzing proxy/VPN indicators...')
+            data = json.loads(response)
+            print(f'[+] Proxy: {data.get("proxy")}')
+            print(f'[+] Hosting: {data.get("hosting")}')
+            if data.get("proxy") or data.get("hosting"):
+                print('[!] Likely VPN/Proxy detected')
+            else:
+                print('[+] Likely residential IP')
+        else:
+            print('[-] Failed to fetch data')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def tor_exit_node_check():
+    clear()
+    art()
+    print('[+] Tor Exit Node Checker')
+    
+    try:
+        print('[+] Reading IP address...')
+        ip = input('[>] Enter IP address: ')
+        print(f'[+] Checking Tor exit node status for {ip}...')
+        url = f'https://check.torproject.org/cgi-bin/TorBulkExitList.py?ip={ip}'
+        response = http_get_with_retry(url, timeout=10)
+        if response and ip in response:
+            print('[!] IP is a Tor exit node')
+        else:
+            print('[+] IP is not a Tor exit node')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def ip_reputation_check():
+    clear()
+    art()
+    print('[+] IP Reputation Check')
+    
+    try:
+        print('[+] Reading IP address...')
+        ip = input('[>] Enter IP address: ')
+        print(f'[+] Checking reputation for {ip}...')
+        print('[+] Note: Requires AbuseIPDB API key')
+        print(f'[+] Checking: {ip}')
+        print('[+] Manual: https://www.abuseipdb.com/')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def threat_intelligence_lookup():
+    clear()
+    art()
+    print('[+] Threat Intelligence Lookup')
+    
+    try:
+        print('[+] Reading IP address...')
+        ip = input('[>] Enter IP address: ')
+        print(f'[+] Performing threat intelligence lookup for {ip}...')
+        print('[+] Manual: https://www.virustotal.com/')
+        print('[+] Manual: https://otx.alienvault.com/')
+        print('[+] Manual: https://www.shodan.io/')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def cidr_range_info():
+    clear()
+    art()
+    print('[+] CIDR Range Info')
+    
+    try:
+        print('[+] Reading CIDR range...')
+        cidr = input('[>] Enter CIDR range (e.g., 192.168.1.0/24): ')
+        print(f'[+] Analyzing CIDR range {cidr}...')
+        network = ipaddress.ip_network(cidr, strict=False)
+        print(f'[+] Network: {network}')
+        print(f'[+] Network address: {network.network_address}')
+        print(f'[+] Broadcast address: {network.broadcast_address}')
+        print(f'[+] Netmask: {network.netmask}')
+        print(f'[+] Total addresses: {network.num_addresses}')
+        print(f'[+] Usable hosts: {max(0, network.num_addresses - 2)}')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def port_scanner():
+    clear()
+    art()
+    print('[+] Port Scanner')
+    
+    try:
+        print('[+] Reading scan parameters...')
+        host = input('[>] Enter host: ')
+        start_port = int(input('[>] Start port: ') or '1')
+        end_port = int(input('[>] End port: ') or '1024')
+        
+        print(f'[+] Scanning {host} ports {start_port}-{end_port}...')
+        print('[+] Using threaded scanning for speed...')
+        
+        open_ports = []
+        lock = threading.Lock()
+        
+        def scan_port(port):
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(1)
+                result = sock.connect_ex((host, port))
+                if result == 0:
+                    with lock:
+                        open_ports.append(port)
+                        print(f'[+] Port {port}: OPEN')
+                sock.close()
+            except:
+                pass
+        
+        with ThreadPoolExecutor(max_workers=50) as executor:
+            futures = [executor.submit(scan_port, port) for port in range(start_port, end_port + 1)]
+            for future in as_completed(futures):
+                pass
+        
+        if not open_ports:
+            print('[-] No open ports found')
+        else:
+            print(f'[+] Found {len(open_ports)} open ports')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def subdomain_finder():
+    clear()
+    art()
+    print('[+] Subdomain Finder')
+    
+    try:
+        print('[+] Reading domain name...')
+        domain = input('[>] Enter domain: ')
+        print(f'[+] Finding subdomains for {domain}...')
+        
+        subdomains = ['www', 'mail', 'ftp', 'localhost', 'webmail', 'smtp', 'pop', 'ns1', 'ns2', 'test', 'dev', 'api', 'admin', 'blog', 'shop', 'cdn', 'secure', 'vpn', 'dns', 'remote', 'git', 'docs', 'status', 'staging', 'portal', 'app', 'm', 'mobile']
+        found = []
+        
+        print(f'[+] Checking {len(subdomains)} common subdomains...')
+        for sub in subdomains:
+            try:
+                host = f'{sub}.{domain}'
+                print(f'[+] Checking: {host}')
+                ip = socket.gethostbyname(host)
+                found.append(f'{host} -> {ip}')
+                print(f'[+] {host} -> {ip}')
+            except:
+                pass
+        
+        if not found:
+            print('[-] No subdomains found')
+        else:
+            print(f'[+] Found {len(found)} subdomains')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def dns_enumeration():
+    clear()
+    art()
+    print('[+] DNS Enumeration')
+    
+    try:
+        print('[+] Reading domain name...')
+        domain = input('[>] Enter domain: ')
+        print(f'[+] Enumerating DNS records for {domain}...')
+        
+        print('[+] Fetching A records...')
+        try:
+            answers = dns.resolver.resolve(domain, 'A')
+            print('[+] A Records:')
+            for a in answers:
+                print(f'    {a}')
+        except:
+            print('[-] No A records')
+        
+        print('[+] Fetching MX records...')
+        try:
+            answers = dns.resolver.resolve(domain, 'MX')
+            print('[+] MX Records:')
+            for mx in answers:
+                print(f'    {mx}')
+        except:
+            print('[-] No MX records')
+        
+        print('[+] Fetching NS records...')
+        try:
+            answers = dns.resolver.resolve(domain, 'NS')
+            print('[+] NS Records:')
+            for ns in answers:
+                print(f'    {ns}')
+        except:
+            print('[-] No NS records')
+        
+        print('[+] Fetching TXT records...')
+        try:
+            answers = dns.resolver.resolve(domain, 'TXT')
+            print('[+] TXT Records:')
+            for txt in answers:
+                print(f'    {txt}')
+        except:
+            print('[-] No TXT records')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def banner_grabbing():
+    clear()
+    art()
+    print('[+] Banner Grabbing')
+    
+    try:
+        print('[+] Reading connection parameters...')
+        host = input('[>] Enter host: ')
+        port = int(input('[>] Enter port: ') or '80')
+        
+        print(f'[+] Connecting to {host}:{port}...')
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(5)
+        sock.connect((host, port))
+        
+        print('[+] Sending request...')
+        sock.send(b'HEAD / HTTP/1.0\r\n\r\n')
+        
+        print('[+] Receiving banner...')
+        banner = sock.recv(1024).decode('utf-8', errors='ignore')
+        print(f'[+] Banner:\n{banner}')
+        sock.close()
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def service_detection():
+    clear()
+    art()
+    print('[+] Service Detection')
+    
+    try:
+        print('[+] Reading connection parameters...')
+        host = input('[>] Enter host: ')
+        port = int(input('[>] Enter port: '))
+        
+        print(f'[+] Connecting to {host}:{port}...')
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(5)
+        sock.connect((host, port))
+        
+        print('[+] Sending probe...')
+        sock.send(b'HEAD / HTTP/1.0\r\n\r\n')
+        
+        print('[+] Analyzing response...')
+        response = sock.recv(1024).decode('utf-8', errors='ignore')
+        print(f'[+] Response:\n{response}')
+        
+        if 'HTTP' in response:
+            print('[+] Service: HTTP')
+        elif 'SSH' in response:
+            print('[+] Service: SSH')
+        elif 'FTP' in response:
+            print('[+] Service: FTP')
+        else:
+            print('[!] Unknown service')
+        
+        sock.close()
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def traceroute():
+    clear()
+    art()
+    print('[+] Traceroute')
+    
+    try:
+        print('[+] Reading hostname...')
+        host = input('[>] Enter host: ')
+        print(f'[+] Tracing route to {host}...')
+        
+        if os.name == 'nt':
+            print('[+] Running Windows traceroute...')
+            os.system(f'tracert {host}')
+        else:
+            print('[+] Running Unix traceroute...')
+            os.system(f'traceroute {host}')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def ping_sweep():
+    clear()
+    art()
+    print('[+] Ping Sweep')
+    
+    try:
+        print('[+] Reading network address...')
+        network = input('[>] Enter network (e.g., 192.168.1): ')
+        print(f'[+] Sweeping {network}.0/24...')
+        
+        hosts_up = []
+        lock = threading.Lock()
+        
+        def ping_host(i):
+            host = f'{network}.{i}'
+            try:
+                if os.name == 'nt':
+                    result = subprocess.run(['ping', '-n', '1', '-w', '1000', host], capture_output=True, text=True)
+                else:
+                    result = subprocess.run(['ping', '-c', '1', '-W', '1', host], capture_output=True, text=True)
+                if result.returncode == 0:
+                    with lock:
+                        hosts_up.append(host)
+                        print(f'[+] Host up: {host}')
+            except:
+                pass
+        
+        with ThreadPoolExecutor(max_workers=50) as executor:
+            futures = [executor.submit(ping_host, i) for i in range(1, 255)]
+            for future in as_completed(futures):
+                pass
+        
+        print(f'[+] Found {len(hosts_up)} hosts up')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def bitcoin_address_lookup():
+    clear()
+    art()
+    print('[+] Bitcoin Address Lookup')
+    
+    try:
+        print('[+] Reading Bitcoin address...')
+        address = input('[>] Enter Bitcoin address: ')
+        print(f'[+] Fetching Bitcoin address info for {address}...')
+        url = f'https://blockchain.info/rawaddr/{address}'
+        response = http_get_with_retry(url, timeout=10)
+        if response and response != '404: Not Found':
+            print('[+] Parsing Bitcoin address data...')
+            data = json.loads(response)
+            print(f'[+] Address: {data.get("address")}')
+            print(f'[+] Total received: {data.get("total_received")} satoshi')
+            print(f'[+] Total sent: {data.get("total_sent")} satoshi')
+            print(f'[+] Balance: {data.get("final_balance")} satoshi')
+            print(f'[+] Transactions: {data.get("n_tx")}')
+        else:
+            print('[-] Failed to fetch address info')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def ethereum_address_lookup():
+    clear()
+    art()
+    print('[+] Ethereum Address Lookup')
+    
+    try:
+        print('[+] Reading Ethereum address...')
+        address = input('[>] Enter Ethereum address: ')
+        print(f'[+] Fetching Ethereum address info for {address}...')
+        url = f'https://api.etherscan.io/api?module=account&action=balance&address={address}&tag=latest'
+        response = http_get_with_retry(url, timeout=10)
+        if response and response != '404: Not Found':
+            print('[+] Parsing Ethereum address data...')
+            data = json.loads(response)
+            if data.get('status') == '1':
+                balance_wei = int(data.get('result', 0))
+                balance_eth = balance_wei / 10**18
+                print(f'[+] Address: {address}')
+                print(f'[+] Balance: {balance_eth} ETH')
+            else:
+                print('[-] Failed to fetch balance')
+        else:
+            print('[-] Failed to fetch data')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def transaction_tracking():
+    clear()
+    art()
+    print('[+] Transaction Tracking')
+    
+    try:
+        print('[+] Reading transaction hash...')
+        tx_hash = input('[>] Enter transaction hash: ')
+        print(f'[+] Fetching transaction info for {tx_hash}...')
+        url = f'https://blockchain.info/rawtx/{tx_hash}'
+        response = http_get_with_retry(url, timeout=10)
+        if response and response != '404: Not Found':
+            print('[+] Parsing transaction data...')
+            data = json.loads(response)
+            print(f'[+] Hash: {data.get("hash")}')
+            print(f'[+] Block height: {data.get("block_height")}')
+            print(f'[+] Time: {datetime.fromtimestamp(data.get("time", 0))}')
+            print(f'[+] Size: {data.get("size")} bytes')
+            print(f'[+] Inputs: {len(data.get("inputs", []))}')
+            print(f'[+] Outputs: {len(data.get("out", []))}')
+        else:
+            print('[-] Failed to fetch transaction')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def wallet_balance():
+    clear()
+    art()
+    print('[+] Wallet Balance')
+    print('[^] 1) Bitcoin')
+    print('[^] 2) Ethereum')
+    
+    try:
+        choice = input('[>] Select currency: ')
+        if choice == '1':
+            print('[+] Reading Bitcoin address...')
+            address = input('[>] Enter Bitcoin address: ')
+            print(f'[+] Fetching balance for {address}...')
+            url = f'https://blockchain.info/q/addressbalance/{address}'
+            response = http_get_with_retry(url, timeout=10)
+            if response:
+                balance_btc = int(response) / 10**8
+                print(f'[+] Balance: {balance_btc} BTC')
+        elif choice == '2':
+            print('[+] Reading Ethereum address...')
+            address = input('[>] Enter Ethereum address: ')
+            print(f'[+] Fetching balance for {address}...')
+            url = f'https://api.etherscan.io/api?module=account&action=balance&address={address}&tag=latest'
+            response = http_get_with_retry(url, timeout=10)
+            if response:
+                print('[+] Parsing balance data...')
+                data = json.loads(response)
+                balance_eth = int(data.get('result', 0)) / 10**18
+                print(f'[+] Balance: {balance_eth} ETH')
+        else:
+            print('[!] Invalid option')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def exchange_rate():
+    clear()
+    art()
+    print('[+] Exchange Rate')
+    
+    try:
+        print('[+] Fetching current exchange rates...')
+        url = 'https://api.coindesk.com/v1/bpi/currentprice.json'
+        response = http_get_with_retry(url, timeout=10)
+        if response and response != '404: Not Found':
+            print('[+] Parsing exchange rate data...')
+            data = json.loads(response)
+            bpi = data.get('bpi', {})
+            print('[+] Bitcoin Price:')
+            for currency, info in bpi.items():
+                print(f'    {currency}: {info.get("rate")} {info.get("code")}')
+        else:
+            print('[-] Failed to fetch exchange rates')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def onion_link_checker():
+    clear()
+    art()
+    print('[+] .onion Link Checker')
+    print('[+] Note: Requires Tor to be running')
+    
+    try:
+        print('[+] Reading .onion link...')
+        onion = input('[>] Enter .onion link: ')
+        print(f'[+] Checking: {onion}')
+        print('[+] Note: Access .onion links via Tor Browser')
+        print('[+] Tor SOCKS proxy: 127.0.0.1:9050')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def tor_status():
+    clear()
+    art()
+    print('[+] Tor Status')
+    
+    try:
+        print('[+] Checking Tor status...')
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(5)
+        result = sock.connect_ex(('127.0.0.1', 9050))
+        if result == 0:
+            print('[+] Tor is running (SOCKS proxy on port 9050)')
+        else:
+            print('[-] Tor is not running or not installed')
+        sock.close()
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def dark_web_search():
+    clear()
+    art()
+    print('[+] Dark Web Search')
+    print('[+] Note: Requires Tor and special search engines')
+    print('[^] Available search engines:')
+    print('[+] Ahmia: http://juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion')
+    print('[+] DuckDuckGo Onion: https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion')
+    print('[+] Torch: http://xmh57jrknzkhv6y3ls3ubitzfqnkrwxhopf5aygthi7d6rplyvk3noyd.onion')
+    
+    try:
+        print('[+] Reading search query...')
+        query = input('[>] Enter search query: ')
+        print(f'[+] Searching for: {query}')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def system_info():
+    clear()
+    art()
+    print('[+] System Information')
+    
+    try:
+        print('[+] Gathering system information...')
+        print(f'[+] OS: {platform.system()}')
+        print(f'[+] OS Version: {platform.version()}')
+        print(f'[+] Platform: {platform.platform()}')
+        print(f'[+] Machine: {platform.machine()}')
+        print(f'[+] Processor: {platform.processor()}')
+        print(f'[+] Hostname: {socket.gethostname()}')
+        print(f'[+] Username: {getpass.getuser()}')
+        print(f'[+] Python Version: {sys.version}')
+        
+        if os.name == 'posix':
+            print('[+] Fetching uptime...')
+            uptime = subprocess.run(['uptime'], capture_output=True, text=True)
+            print(f'[+] Uptime: {uptime.stdout.strip()}')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def password_strength_checker():
+    clear()
+    art()
+    print('[+] Password Strength Checker')
+    
+    try:
+        print('[+] Reading password...')
+        password = input('[>] Enter password: ')
+        print('[+] Analyzing password strength...')
+        
+        score = 0
+        length = len(password)
+        
+        if length >= 8:
+            score += 1
+        if length >= 12:
+            score += 1
+        if length >= 16:
+            score += 1
+        
+        if re.search(r'[a-z]', password):
+            score += 1
+        if re.search(r'[A-Z]', password):
+            score += 1
+        if re.search(r'[0-9]', password):
+            score += 1
+        if re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
+            score += 1
+        
+        if score >= 7:
+            print('[+] Strength: Very Strong')
+        elif score >= 5:
+            print('[+] Strength: Strong')
+        elif score >= 3:
+            print('[!] Strength: Medium')
+        else:
+            print('[-] Strength: Weak')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def email_validator():
+    clear()
+    art()
+    print('[+] Email Validator')
+    
+    try:
+        print('[+] Reading email address...')
+        email = input('[>] Enter email address: ')
+        print('[+] Validating email format...')
+        
+        pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        if re.match(pattern, email):
+            print('[+] Email format is valid')
+        else:
+            print('[-] Email format is invalid')
+    except Exception as e:
+        print(f'[-] Error: {e}')
+    
+    input('\n[>] Press enter to continue...')
+
+def script():
+    global version
+    
+    while True:
+        clear()
+        art()
+        print('[*] Imperial Nano > ')
+        print('[~]     Core >')
+        print('[^]         1) Version')
+        print('[^]         2) Latest Version')
+        print('[^]         3) Update')
+        print('[~]     Utilities >')
+        print('[^]         4) Hash Generator')
+        print('[^]         5) Base64 Encoder')
+        print('[^]         6) Password Generator')
+        print('[^]         7) UUID Generator')
+        print('[^]         8) Text Manipulation')
+        print('[^]         9) QR Code Generator')
+        print('[^]         10) Base64 Decoder')
+        print('[^]         11) Hash Cracker')
+        print('[^]         12) URL Encoder')
+        print('[^]         13) URL Decoder')
+        print('[~]     Image OSINT >')
+        print('[^]         14) EXIF Data Extraction')
+        print('[^]         15) Reverse Image Search')
+        print('[^]         16) Metadata Viewer')
+        print('[~]     Domain/Website Intel >')
+        print('[^]         17) WHOIS Lookup')
+        print('[^]         18) DNS Records')
+        print('[^]         19) DNS Zone Transfer')
+        print('[^]         20) SSL Certificate Info')
+        print('[^]         21) Security Headers Check')
+        print('[^]         22) robots.txt Analysis')
+        print('[^]         23) Sitemap Parser')
+        print('[~]     Social Media OSINT >')
+        print('[^]         24) Instagram Profile Info')
+        print('[^]         25) Twitter/X User Lookup')
+        print('[^]         26) Reddit User Analysis')
+        print('[^]         27) TikTok Profile Lookup')
+        print('[^]         28) YouTube Channel Info')
+        print('[^]         29) GitHub Profile Info')
+        print('[~]     Data Breach Search >')
+        print('[^]         30) Check Email in Breaches')
+        print('[^]         31) Check Password in Breaches')
+        print('[^]         32) Check Domain in Breaches')
+        print('[^]         33) Check Username in Breaches')
+        print('[^]         34) Dark Web Mentions')
+        print('[~]     Web Scraper >')
+        print('[^]         35) Extract Emails from Websites')
+        print('[^]         36) Scrape Phone Numbers')
+        print('[^]         37) Find Linked Pages')
+        print('[^]         38) Extract Metadata')
+        print('[^]         39) Save Page Content')
+        print('[~]     Phone Number Lookup >')
+        print('[^]         40) Carrier Detection')
+        print('[^]         41) Location by Area Code')
+        print('[^]         42) Voicemail Detection')
+        print('[^]         43) Line Type Check')
+        print('[^]         44) Spam Score Check')
+        print('[~]     Username OSINT >')
+        print('[^]         45) Check Username Across Platforms')
+        print('[^]         46) Find Social Media Profiles')
+        print('[^]         47) Detect Account Creation Dates')
+        print('[^]         48) Find Related Usernames')
+        print('[^]         49) Profile Picture Reverse Lookup')
+        print('[~]     IP Intelligence >')
+        print('[^]         50) IP Geolocation')
+        print('[^]         51) ISP Lookup')
+        print('[^]         52) Proxy/VPN Detection')
+        print('[^]         53) Tor Exit Node Checker')
+        print('[^]         54) IP Reputation Check')
+        print('[^]         55) Threat Intelligence Lookup')
+        print('[^]         56) CIDR Range Info')
+        print('[~]     Network Recon >')
+        print('[^]         57) Port Scanner')
+        print('[^]         58) Subdomain Finder')
+        print('[^]         59) DNS Enumeration')
+        print('[^]         60) Banner Grabbing')
+        print('[^]         61) Service Detection')
+        print('[^]         62) Traceroute')
+        print('[^]         63) Ping Sweep')
+        print('[~]     Crypto Investigation >')
+        print('[^]         64) Bitcoin Address Lookup')
+        print('[^]         65) Ethereum Address Lookup')
+        print('[^]         66) Transaction Tracking')
+        print('[^]         67) Wallet Balance')
+        print('[^]         68) Exchange Rate')
+        print('[~]     Dark Net >')
+        print('[^]         69) .onion Link Checker')
+        print('[^]         70) Tor Status')
+        print('[^]         71) Dark Web Search')
+        print('[~]     Additional Tools >')
+        print('[^]         72) System Info')
+        print('[^]         73) Password Strength Checker')
+        print('[^]         74) Email Validator')
+        print('[^]         0) Exit')
+        
+        try:
+            user = input('\n[>] Imperial Nano > ')
+        except KeyboardInterrupt:
+            print('\n[!] Use 0 to exit.')
+            input('\n[>] Press enter to continue...')
+            continue
+        except EOFError:
+            print('\n[!] Input error')
+            print('[+] Resolving...')
+            time.sleep(0.2)
+            print('[-] Resolved : User interrupted input')
+            input('\n[>] Press enter to continue...')
+            continue
+        
+        if user == '0':
+            print('[+] Exiting...')
+            sys.exit(0)
+        elif user == '1':
+            clear()
+            art()
+            print('[+] Fetching version...')
+            if not version:
+                print('[!] Encountered Error')
+                time.sleep(0.1)
+                print('[+] Resolving...')
+                time.sleep(0.2)
+                print('[+] Identified Error : version is empty')
+                print('[+] Attempting to resolve...')
+                time.sleep(0.2)
+                version = '27.0.0'
+                print('[+] Reset version to default')
+                print('[+] Retrying...')
+                time.sleep(0.2)
+            print(f'[+] Current version : {version}')
+            input('\n[>] Press enter to continue...')
+        elif user == '2':
+            clear()
+            art()
+            latestver, success = fetch_latest_version()
+            if success:
+                print(f'[+] Latest version : {latestver}')
+                if latestver == version:
+                    print('[+] You are on the latest version')
+                else:
+                    print(f'[+] Current version : {version}')
+                    print('[!] Update available')
+            input('\n[>] Press enter to continue...')
+        elif user == '3':
+            clear()
+            art()
+            latestver, success = fetch_latest_version()
+            if success and latestver != version:
+                print(f'[+] Update available : {version} -> {latestver}')
+                if auto_update():
+                    print('[+] Restarting...')
+                    os.execv(sys.executable, [sys.executable] + sys.argv)
+            elif success:
+                print('[+] Already on latest version')
+            input('\n[>] Press enter to continue...')
+        elif user == '4':
+            hash_generator()
+        elif user == '5':
+            base64_encode()
+        elif user == '6':
+            password_generator()
+        elif user == '7':
+            uuid_generator()
+        elif user == '8':
+            text_manipulation()
+        elif user == '9':
+            qr_code_generator()
+        elif user == '10':
+            base64_decode()
+        elif user == '11':
+            hash_cracker()
+        elif user == '12':
+            url_encoder()
+        elif user == '13':
+            url_decoder()
+        elif user == '14':
+            exif_extraction()
+        elif user == '15':
+            reverse_image_search()
+        elif user == '16':
+            metadata_viewer()
+        elif user == '17':
+            whois_lookup()
+        elif user == '18':
+            dns_records()
+        elif user == '19':
+            dns_zone_transfer()
+        elif user == '20':
+            ssl_certificate_info()
+        elif user == '21':
+            security_headers_check()
+        elif user == '22':
+            robots_txt_analysis()
+        elif user == '23':
+            sitemap_parser()
+        elif user == '24':
+            instagram_profile_info()
+        elif user == '25':
+            twitter_user_lookup()
+        elif user == '26':
+            reddit_user_analysis()
+        elif user == '27':
+            tiktok_profile_lookup()
+        elif user == '28':
+            youtube_channel_info()
+        elif user == '29':
+            github_profile_info()
+        elif user == '30':
+            check_email_breaches()
+        elif user == '31':
+            check_password_breaches()
+        elif user == '32':
+            check_domain_breaches()
+        elif user == '33':
+            check_username_breaches()
+        elif user == '34':
+            dark_web_mentions()
+        elif user == '35':
+            extract_emails()
+        elif user == '36':
+            scrape_phone_numbers()
+        elif user == '37':
+            find_linked_pages()
+        elif user == '38':
+            extract_web_metadata()
+        elif user == '39':
+            save_page_content()
+        elif user == '40':
+            carrier_detection()
+        elif user == '41':
+            location_by_area_code()
+        elif user == '42':
+            voicemail_detection()
+        elif user == '43':
+            line_type_check()
+        elif user == '44':
+            spam_score_check()
+        elif user == '45':
+            username_osint()
+        elif user == '46':
+            find_social_profiles()
+        elif user == '47':
+            detect_account_dates()
+        elif user == '48':
+            find_related_usernames()
+        elif user == '49':
+            profile_picture_reverse()
+        elif user == '50':
+            ip_geolocation()
+        elif user == '51':
+            isp_lookup()
+        elif user == '52':
+            proxy_vpn_detection()
+        elif user == '53':
+            tor_exit_node_check()
+        elif user == '54':
+            ip_reputation_check()
+        elif user == '55':
+            threat_intelligence_lookup()
+        elif user == '56':
+            cidr_range_info()
+        elif user == '57':
+            port_scanner()
+        elif user == '58':
+            subdomain_finder()
+        elif user == '59':
+            dns_enumeration()
+        elif user == '60':
+            banner_grabbing()
+        elif user == '61':
+            service_detection()
+        elif user == '62':
+            traceroute()
+        elif user == '63':
+            ping_sweep()
+        elif user == '64':
+            bitcoin_address_lookup()
+        elif user == '65':
+            ethereum_address_lookup()
+        elif user == '66':
+            transaction_tracking()
+        elif user == '67':
+            wallet_balance()
+        elif user == '68':
+            exchange_rate()
+        elif user == '69':
+            onion_link_checker()
+        elif user == '70':
+            tor_status()
+        elif user == '71':
+            dark_web_search()
+        elif user == '72':
+            system_info()
+        elif user == '73':
+            password_strength_checker()
+        elif user == '74':
+            email_validator()
+        else:
+            print('[!] Invalid option')
+            print('[+] Available options : 0-74')
+            input('\n[>] Press enter to continue...')
+
+def updates():
+    clear()
+    art()
+    print('[+] Checking for updates...')
+    time.sleep(0.3)
+    latestver, success = fetch_latest_version()
+    if not success:
+        print('[+] Running current version...')
+        time.sleep(0.5)
+        script()
+        return
+    print(f'[+] Current version : {version}')
+    print(f'[+] Latest version : {latestver}')
+    time.sleep(0.3)
+    if latestver == version:
+        print('[+] Version up to date')
+        print('[+] Executing script...')
+        time.sleep(0.5)
+        script()
+    else:
+        print('[+] Update available')
+        print('[+] Updating...')
+        time.sleep(0.3)
+        if auto_update():
+            print('[+] Restarting...')
+            time.sleep(0.3)
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        else:
+            print('[+] Update failed. Running current version...')
+            time.sleep(0.5)
+            script()
+
+def main():
+    clear()
+    ip = get_public_ip()
+    art()
+    print(f"[+] Request received from: {ip}")
+    print('[+] Creator or owner of the script is not liable for anything the user does with this program > ')
+    print('[^]    > MIT License')
+    try:
+        agree = input("\n[y] Proceed? > ").lower()
+    except KeyboardInterrupt:
+        print('\n[!] Operation cancelled by user.')
+        sys.exit(0)
+    except EOFError:
+        print('\n[!] Input error')
+        print('[!] Operation cancelled by user.')
+        sys.exit(0)
+    if agree == 'y':
+        print('[+] Successful operation, running script...')
+        time.sleep(0.5)
+        updates()
+    elif agree == 'n':
+        print("\n[!] Operation cancelled by user.")
+        sys.exit(0)
+    else:
+        print("\n[!] Invalid input")
+        print("[+] Enter 'y' to proceed or 'n' to cancel")
+        time.sleep(0.2)
+        main()
+
+if __name__ == "__main__":
+    main()
